@@ -59,8 +59,40 @@ function saveDraft(){if(!autosaveEnabled){status.textContent='Автосохра
 function normalize(x){let d=defaults();if(x?.version!==3)return d;return{...d,...x,project:{...d.project,...(x.project||{})},sale:{...d.sale,...(x.sale||{})},tax:{...d.tax,...(x.tax||{})},costs:Array.isArray(x.costs)?x.costs.map(l=>({...defaultLine(),...l,kind:'production',id:l.id||uid()})):d.costs}}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function download(content,name,type){let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
-async function saveJson(){let text=JSON.stringify(data,null,2);if(handle&&handle.createWritable){try{let w=await handle.createWritable();await w.write(text);await w.close();status.textContent='Сохранено в открытый JSON';return}catch(e){if(e.name==='AbortError')return;handle=null}}if(window.showSaveFilePicker){try{handle=await showSaveFilePicker({suggestedName:(data.project.name||'расчёт')+'.json',types:[{description:'JSON',accept:{'application/json':['.json']}}]});let w=await handle.createWritable();await w.write(text);await w.close();status.textContent='JSON сохранён';return}catch(e){if(e.name==='AbortError')return}}download(text,(data.project.name||'расчёт')+'.json','application/json');status.textContent='Скачана новая копия JSON'}
-async function openJson(){if(window.showOpenFilePicker){try{let hs=await showOpenFilePicker({multiple:false,types:[{description:'JSON',accept:{'application/json':['.json']}}]});let h=hs&&hs[0];if(!h)return;let f=await h.getFile();data=normalize(JSON.parse(await f.text()));handle=h;populate();saveDraft();status.textContent='Открыт '+f.name+' — «Сохранить JSON» перезапишет этот файл';return}catch(e){if(e.name==='AbortError')return}}fileInput.click()}
+let openDialogBusy=false,saveDialogBusy=false;
+async function saveJson(){
+  if(saveDialogBusy)return;
+  saveDialogBusy=true;
+  try{
+    let text=JSON.stringify(data,null,2);
+    if(handle&&handle.createWritable){
+      try{let w=await handle.createWritable();await w.write(text);await w.close();status.textContent='Сохранено в открытый JSON';return}
+      catch(e){if(e.name==='AbortError')return;handle=null;alert('Не удалось перезаписать открытый JSON. Файл можно сохранить новой копией.') ;return}
+    }
+    if(typeof window.showSaveFilePicker==='function'){
+      try{
+        let h=await window.showSaveFilePicker({suggestedName:(data.project.name||'расчёт')+'.json',types:[{description:'JSON',accept:{'application/json':['.json']}}]});
+        if(!h)return;
+        let w=await h.createWritable();await w.write(text);await w.close();handle=h;status.textContent='JSON сохранён';return
+      }catch(e){if(e.name==='AbortError')return;alert('Не удалось открыть окно сохранения JSON.');return}
+    }
+    download(text,(data.project.name||'расчёт')+'.json','application/json');status.textContent='Скачана новая копия JSON';
+  }finally{saveDialogBusy=false}
+}
+async function openJson(){
+  if(openDialogBusy)return;
+  openDialogBusy=true;
+  try{
+    if(typeof window.showOpenFilePicker==='function'){
+      try{
+        let hs=await window.showOpenFilePicker({multiple:false,types:[{description:'JSON',accept:{'application/json':['.json']}}]});
+        let h=hs&&hs[0];if(!h)return;
+        let f=await h.getFile();data=normalize(JSON.parse(await f.text()));handle=h;populate();saveDraft();status.textContent='Открыт '+f.name+' — «Сохранить JSON» перезапишет этот файл';return
+      }catch(e){if(e.name==='AbortError')return;alert('Не удалось открыть JSON.');return}
+    }
+    fileInput.click();
+  }finally{openDialogBusy=false}
+}
 function clearCalculation(){if(!confirm('Стереть текущий расчёт? Открытый JSON останется привязан, и его можно будет перезаписать кнопкой «Сохранить JSON».'))return;let fresh=defaults();data=fresh;populate();saveDraft();status.textContent=handle?'Расчёт очищен. Открытый JSON остаётся выбранным.':'Расчёт очищен.'}
 function csv(){let r=calculate(),rows=[['Наименование','Способ задания','Расход / доля %','Ед. / %','Фактический расход','Факт. ед.','Цена','Цена за','Цена с/без НДС','Ставка НДС','Вычет','Плотность','Количество в ед. цены','Сумма без НДС','НДС','Сумма с НДС','Признанный расход']];data.costs.forEach((l,i)=>{let c=r.lines[i];rows.push([l.name,(data.project.costMode==='recipe'?(l.recipeInputMode==='fixed'?'Фиксированный расход':'% рецептуры'):'Фиксированный расход'),l.qty,(data.project.costMode==='recipe'&&l.recipeInputMode!=='fixed')?'%':l.qtyUnit,c.actualQty,c.actualUnit,l.unitPrice,l.priceUnit,l.priceMode,l.vatRate,l.vatDeductible?'Да':'Нет',l.density,c.value,c.net,c.vat,c.gross,c.recognized])});rows.push([],['ИТОГО'],['Фактически оплачено за производство с НДС',r.productionCash],['Реальные затраты на единицу с НДС',r.cashUnitCost],['Себестоимость партии для прибыли',r.production],['Себестоимость единицы для прибыли',r.unitCost],['Выручка без НДС',r.netRevenue],['Исходящий НДС',r.outputVat],['Входной НДС к вычету',r.inputVat],['НДС к уплате',r.vatDue],['НДС к зачёту/возмещению (не деньги)',r.vatCredit],['Фактически уплачено НДС',r.actualVatPaid],['Фактически получено возмещение НДС',r.actualVatRefund],['Реальный результат до налога',r.realProfitBeforeTax],['Налоговая база по налогу на прибыль (справочно)',r.taxBase],['Налог на прибыль',r.profitTax],['Реальный результат после налога',r.netProfit],['Денежный результат',r.cashResult]);download('\ufeff'+rows.map(a=>a.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(';')).join('\n'),(data.project.name||'расчёт')+'.csv','text/csv;charset=utf-8')}
 productUnit.innerHTML=opts('шт');saleUnit.innerHTML=opts('шт');bindForm();costMode.addEventListener('change',()=>{renderRows();update();saveDraft()});recipeBasis.addEventListener('change',()=>{renderRows();update();saveDraft()});productUnit.addEventListener('change',()=>{if(data.project.costMode==='recipe'){renderRows();update()}});batchQty.addEventListener('input',()=>{if(data.project.costMode==='recipe')refreshRowOutputs(calculate())});productDensity.addEventListener('input',()=>{if(data.project.costMode==='recipe')refreshRowOutputs(calculate())});function readCostField(e){let tr=e.target.closest('tr');if(!tr)return'';let i=+tr.dataset.i,f=e.target.dataset.f;if(!f)return'';let line=data.costs[i],old=line[f],v=e.target.value;if(['qty','unitPrice','vatRate','density'].includes(f))v=n(v);if(f==='vatDeductible')v=v==='true';line[f]=v;
